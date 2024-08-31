@@ -1,12 +1,16 @@
 import React, { useState, useEffect } from 'react';
 import Table from 'react-bootstrap/Table';
 import Button from 'react-bootstrap/Button';
-import Accordion from 'react-bootstrap/Accordion';
 import * as XLSX from 'xlsx';
 import TimesheetHeader from './TimesheetHeader';
 import TimesheetBody from './TimesheetBody';
-import { TimesheetEntry, roles, roleMapping, isValidDate, convertExcelDate } from './timesheetUtils';
+import { TimesheetEntry, roleMapping, isValidDate, convertExcelDate } from './timesheetUtils';
+// import { ReportAccordion } from './AccordionComponent';
 import { VerificationResultsAccordion, ReportAccordion } from './AccordionComponent';
+
+const API_URL = process.env.REACT_APP_API_URL;
+
+console.log("lodaded " , API_URL);
 
 const TimesheetTable: React.FC = () => {
   const [timesheetEntries, setTimesheetEntries] = useState<TimesheetEntry[]>([]);
@@ -20,12 +24,11 @@ const TimesheetTable: React.FC = () => {
     }
   }, []);
 
-  useEffect(() => {
-    localStorage.setItem('timesheetEntries', JSON.stringify(timesheetEntries));
-  }, [timesheetEntries]);
 
   const addRow = (date: string = '', hours: number = 0, location: string = '', position: string = '') => {
-    setTimesheetEntries([...timesheetEntries, { date, hours, location, position }]);
+    const newEntries = [...timesheetEntries, { date, hours, location, position }];
+    setTimesheetEntries(newEntries);
+    saveEntriesToLocalStorage(newEntries);
   };
 
   const handleAddRowClick = () => {
@@ -33,7 +36,9 @@ const TimesheetTable: React.FC = () => {
   };
 
   const removeRow = (index: number) => {
-    setTimesheetEntries(timesheetEntries.filter((_, i) => i !== index));
+    const newEntries = timesheetEntries.filter((_, i) => i !== index);
+    setTimesheetEntries(newEntries);
+    saveEntriesToLocalStorage(newEntries);
   };
 
   const handleInputChange = (index: number, field: keyof TimesheetEntry, value: string | number) => {
@@ -44,14 +49,17 @@ const TimesheetTable: React.FC = () => {
       newEntries[index][field] = value as string;
     }
     setTimesheetEntries(newEntries);
+    saveEntriesToLocalStorage(newEntries);
   };
+
 
   const handleFiles = (files: FileList) => {
     if (files.length > 0) {
       const file = files[0];
       if (/\.(xls|xlsx)$/i.test(file.name)) {
         const reader = new FileReader();
-        reader.onload = (e) => {
+  
+        reader.onload = (e: ProgressEvent<FileReader>) => {
           const data = new Uint8Array(e.target!.result as ArrayBuffer);
           const workbook = XLSX.read(data, { type: 'array', cellDates: true });
           const firstSheetName = workbook.SheetNames[0];
@@ -66,20 +74,42 @@ const TimesheetTable: React.FC = () => {
             const transformedRole = roleMapping[role] || role;
             return { date: formattedDate, hours, location, position: transformedRole };
           });
-
+  
+          setTimesheetEntries([]);
           setTimesheetEntries(filteredData);
+          saveEntriesToLocalStorage(filteredData);
         };
+  
         reader.readAsArrayBuffer(file);
       } else {
         alert("Please select a valid Excel file (.xls or .xlsx).");
       }
     }
   };
+  
+  const onFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files) {
+      // Temporarily reset the value to ensure the change event fires for the same file
+      const input = e.target;
+      handleFiles(e.target.files);
+      input.value = ''; // Reset input value to ensure change event triggers again
+    }
+  };
+  
+  const saveEntriesToLocalStorage = (entries: TimesheetEntry[]) => {
+    localStorage.setItem('timesheetEntries', JSON.stringify(entries));
+  };
 
   const sendTableDataToBackend = async () => {
     const email = localStorage.getItem('email');
-    const url = "http://127.0.0.1:5001/verify";
-  
+    // const url = API_URL;
+    // const url = "http://127.0.0.1:5001/verify";
+    const verifyEndpoint =  API_URL + "/verify";  
+    alert(`sending to backend ${verifyEndpoint}`);
+    // const deployed_url = "http://backend:5001/" + "verify"
+    
+    // console.log("API_URL " + API_URL + " and url that I created is " + url);    
+
     if (!email) {
       alert('Email is required');
       return;
@@ -89,9 +119,10 @@ const TimesheetTable: React.FC = () => {
       alert('Timesheet entries are required');
       return;
     }
+    console.log("sending timesheet entries to backend: " , timesheetEntries);
   
     try {
-      const response = await fetch(url, {
+      const response = await fetch(verifyEndpoint, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -116,25 +147,18 @@ const TimesheetTable: React.FC = () => {
         return;
       }
   
-      const { report, invalidEntries } = result;
+      const report = result.report;
 
-
-      displayReport(report);
-      console.log(report);
-      displayVerificationResults(invalidEntries);
+      const invalidEntries = report["invalidEntries"];
+      console.log("Setting REPORT:" , report)
+      setReport(report);      
+      console.log("Setting invalidEntries: ", invalidEntries);
+      setVerificationResults(invalidEntries);
     } catch (error) {
       console.error('Error sending data to backend:', error);
-      alert('An error occurred while sending data to the backend');
+      // alert('An error occurred while sending data to the backend at ,' + url + ' ' + "error" + ' ' + error);
     }
   };  
-
-  const displayReport = (report: any) => {
-    setReport(report);
-  };
-
-  const displayVerificationResults = (results: any) => {
-    setVerificationResults(results);
-  };
 
   return (
     <div className="p-3 bg-dark text-white">
@@ -142,7 +166,7 @@ const TimesheetTable: React.FC = () => {
         <input
           type="file"
           accept=".xls,.xlsx"
-          onChange={(e) => handleFiles(e.target.files!)}
+          onChange={onFileChange}
           className="form-control form-control-dark me-3"
           style={{ flex: 3 }}
         />
@@ -159,8 +183,10 @@ const TimesheetTable: React.FC = () => {
           </Button>
         </div>
       )}
-       {report && <div style={{ marginTop: '20px' }}><ReportAccordion report={report} /></div>}
-      {verificationResults.length > 0 && <div style={{ marginTop: '20px' }}><VerificationResultsAccordion results={verificationResults} /></div>}
+      {report && <div style={{ marginTop: '20px' }}><ReportAccordion report={report} /></div>}
+      {verificationResults.length > 0 && <div style={{ marginTop: '20px' }}>
+        <VerificationResultsAccordion invalidEntries={verificationResults} /></div>
+      }
     </div>
   );
 };
